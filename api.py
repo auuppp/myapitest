@@ -85,7 +85,7 @@ def sendMail(text):
 	subject = '[AutomantionTest]接口自动化测试报告通知'  
 	smtpserver = 'smtp.qq.com'  
 	username = '1034977055@qq.com'  
-	password = '1234@qwer'  
+	password = '1qr'  
 
 	msg = MIMEText(text,'html','utf-8')      
 	msg['Subject'] = subject  

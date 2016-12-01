@@ -9,64 +9,31 @@ import logging
 import json
 import smtplib  
 from email.mime.text import MIMEText
-host='172.30.121.56'
-port='80'
-username='admin'
-password='admin'
-
+import xlwt
+from xlutils.copy import copy
 log_file = os.path.join(os.getcwd(),'log/liveappapi.log')
 log_format = '[%(asctime)s] [%(levelname)s] %(message)s'
 logging.basicConfig(format=log_format,filename=log_file,filemode='w',level=logging.INFO)
-def getcsrf(host):
-	request = requests.Session()
-	r = request.get(host+'/')
-	#print r.text
-	pattern="<input type='hidden' name='csrfmiddlewaretoken' value='(.*)' />"
-	csrfmiddlewaretoken=re.findall(pattern,r.text)
-	print '**********'
-	print csrfmiddlewaretoken
-	csrfmiddlewaretoken=csrfmiddlewaretoken[0]
-	return csrfmiddlewaretoken,request
-def login(host,username,password):
-	csrfmiddlewaretoken,request=getcsrf(host)
-	#print csrfmiddlewaretoken
-	request_data={'username': username, 'password': password,'submit':u'登 录','csrfmiddlewaretoken':csrfmiddlewaretoken}
-	headers={'Cookie':'csrftoken='+csrfmiddlewaretoken,'Host':host,'User-Agent':'Mozilla/5.0 (Windows NT 6.1; Win64; x64; rv:47.0) Gecko/20100101 Firefox/47.0',
-	   	 'Accept':'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-	   	 'Accept-Language':'zh-CN,zh;q=0.8,en-US;q=0.5,en;q=0.3',
-	   	 'Referer':host+'/',
-	   	 'Content-Type':'application/x-www-form-urlencoded'}
-	r = request.post(host+'/',data=request_data)
-	#print r.cookies
-	#print r.text
-	try:
-		assert "网络" in r.text
-		print '登录成功'
-		return r.cookies['sessionid'],csrfmiddlewaretoken
-	except Exception, e:
-		print '登录失败'
-	finally:
-		print '###'
-
-# def testapi():
-# 	sessionid,csrf=login(host, port, username, password)
-# 	HEADERS = {"cookie": "csrftoken="+csrf+"; sessionid="+sessionid}
-
-# 	url="http://172.30.121.56/network/"
-# 	response = requests.get(url, headers=HEADERS)
-# 	text = response.text
-# 	print text
+def gettoken_url():
+	payload = {
+           "auth": {
+           "tenantName": "admin",
+           "passwordCredentials": {
+                "username": "admin",
+                "password": "teamsun"
+            }
+           }
+         }
+	payload = json.dumps(payload)
+	r = requests.post("http://172.30.121.32:5000/v2.0/tokens",data=payload)
+	decodejson = json.loads(r.text)
+	tokenId=decodejson['access']['token']['id']
+	novaurl=decodejson['access']['serviceCatalog'][0]['endpoints'][0]['publicURL']
+	return tokenId,novaurl
 def apiTest(num,api_name,host,request_url,request_data,check_point,request_method,request_data_type):
-	# headers = {'Content-Type':'application/x-www-form-urlencoded; charset=UTF-8',
-	#            'X-Requested-With':'XMLHttpRequest',
-	#            'Connection':'keep-alive',
-	#            'Referer':'http://'+host+':'+port+'/',
-	#            'User-Agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/43.0.2357.134 Safari/537.36'}
-	#sessionid,csrf=login(host, username, password)
-	#HEADERS = {"cookie": "csrftoken="+csrf+"; sessionid="+sessionid}
-	HEADERS={"X-Auth-Token":"16b23c15c7ba4cd1b2e06e8d5a881c23"}
-	#request_data=request_data+'&csrfmiddlewaretoken='+csrf
-	#request_data=json.dumps(request_data)
+	tokenId,novaurl=gettoken_url()
+	host=novaurl
+	HEADERS={"X-Auth-Token":tokenId}
 	if request_method == 'POST':
 		response = requests.post(host+request_url, data=request_data,headers=HEADERS)
 	if request_method=='GET':
@@ -74,21 +41,20 @@ def apiTest(num,api_name,host,request_url,request_data,check_point,request_metho
 	status = response.status_code
 	resp = response.text
 	if status == 200:
-		#resp = resp.decode('utf-8')
-		#print check_point
 		try:
 			assert check_point in resp
 			logging.info("编号为："+num + '的 ' + api_name + ' 测试成功, ' + str(status) + ', ' + str(resp))
-			return "Pass"
+			return "Pass",resp,host
 		except Exception, e:
 			logging.error("编号为："+num + '的 ' + api_name + ' 失败！！！, [ ' + str(status) + ' ], ' + str(resp))
-			return "200Fail"
+			return "200Fail",resp,host
 	else:
 		logging.error("编号为："+num + '的 ' + api_name + ' 失败！！！, [ ' + str(status) + ' ], ' + str(resp))
-		return "2001Fail"
+		return "测试失败，错误代码为："+str(status),resp,host
 def runTest(testCaseFile):
 	testCase = xlrd.open_workbook(testCaseFile)
 	table = testCase.sheet_by_index(0)
+	wb = copy(testCase)  
 	html=''
 	for i in range(1,table.nrows):
 		num = str(int(table.cell(i,0).value)).replace('\n','').replace('\r','')
@@ -102,7 +68,14 @@ def runTest(testCaseFile):
 		check_point = table.cell(i,8).value
 		correlation = table.cell(i,9).value.replace('\n','').replace('\r','').split(';')
 		active=table.cell(i,10).value.replace('\n','').replace('\r','')
-		status=apiTest(num, api_name, host, request_url, request_data, check_point, request_method, request_data_type)
+		status,resp,host=apiTest(num, api_name, host, request_url, request_data, check_point, request_method, request_data_type)
+		print status,resp,host  
+		#通过get_sheet()获取的sheet有write()方法
+		ws = wb.get_sheet(0)
+		ws.write(i, 2, host)
+		ws.write(i, 10, resp)
+		ws.write(i, 11, unicode(status))
+		wb.save(testCaseFile)
 		html=html+'<tr><td>' + num + '</td><td>' + api_name + '</td><td>' + host+request_url + '</td><td>' + status + '</td></tr>'
 	return table.nrows,html
 def sendMail(text):
@@ -112,7 +85,7 @@ def sendMail(text):
 	subject = '[AutomantionTest]接口自动化测试报告通知'  
 	smtpserver = 'smtp.qq.com'  
 	username = '1034977055@qq.com'  
-	password = ''  
+	password = '1234@qwer'  
 
 	msg = MIMEText(text,'html','utf-8')      
 	msg['Subject'] = subject  
@@ -125,11 +98,11 @@ def sendMail(text):
 	smtp.sendmail(sender, receiver + mailToCc, msg.as_string())  
 	smtp.quit()
 if __name__ == '__main__':
-	num,reporthtml=runTest('TestCase.xlsx')
+	num,reporthtml=runTest('TestCase.xls')
 	#print type(num)
 	html = '<html><meta charset=\"utf-8\"><body>接口测试，共有 ' + str(num-1) + '个 ，列表如下：' + '</p><table><tr><td style="width:100px;">接口序号</td><td style="width:200px;">接口名称</td><td style="width:300px;">接口地址</td><td style="width:200px;">测试结果</td></tr>'
 	html = html + reporthtml+'</table></body></html>'
-	print html
+	#print html
 	f = open("report.html",'w')
 	f.write(html)
 	f.close()
